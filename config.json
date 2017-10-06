@@ -1,5 +1,12 @@
 {
+	"hellos": [
+		"bonjour", "salut", "hey", "yo", "coucou", "plop",
+		"hello", "hi"
+	],
 	"forbiddenWords": [
 		"caca"
-	]
+	],
+	"warningCount": 3,
+	"_comment": "timeout duration in seconds",
+	"timeoutDuration": 60
 }

@@ -1,14 +1,15 @@
-var Discord = require('discord.io');
-var logger = require('winston');
-var auth = require('./auth.json');
-var config = require('./config.json');
+var Discord = require("discord.io");
+var logger = require("winston");
+var auth = require("./auth.json");
+var config = require("./config.json");
+var async = require("async");
 
 // Configure logger settings
 logger.remove(logger.transports.Console);
 logger.add(logger.transports.Console, {
 	colorize: true
 });
-logger.level = 'debug';
+logger.level = "debug";
 
 // Initialize Discord Bot
 var client = new Discord.Client({
@@ -17,105 +18,150 @@ var client = new Discord.Client({
 });
 
 // Warnings
+var usersInfos = {};
 var warnings = {};
 var timeouts = {};
 
-function sendWarningMessage(channelID, userID) {
-	var w = warnings.hasOwnProperty(userID) ? warnings[userID] : 0;
+function addWarning(channelID, userID, callback) {
+	async.waterfall([
+		function(callback) {
+			usersInfos[userID].warnings++;
+			return callback(null, usersInfos[userID].warnings);
+		},
+		function(warningCount, callback) {
+			if (warningCount >= config.warningCount) {
+				usersInfos[userID].timeout = new Date().getTime() + config.timeoutDuration * 1e3;
+				usersInfos[userID].warnings = 0;
+				client.sendMessage({
+					to: channelID,
+					message: "<@" + userID + ">, you have been timed out for one minute."
+				}, callback);
+			} else {
+				client.sendMessage({
+					to: channelID,
+					message: "<@" + userID + ">, you have now " + warningCount + " warning" + (warningCount > 1 ? "s" : "") + "."
+				}, callback);
+			}
+		}
+	], function(err, results) {
+		if (err) {
+			logger.error(err);
+			return callback(err);
+		}
+		return callback();
+	})
+}
+
+function sendWarningMessage(channelID, userID, callback) {
+	var w = usersInfos[userID].warnings || 0;
 	client.sendMessage({
 		to: channelID,
 		message: "<@" + userID + ">, you have now " + w + " warning" + (w > 1 ? "s" : "") + "."
-	});
+	}, callback);
 }
 
-function addWarning(channelID, userID) {
-	if (!warnings.hasOwnProperty(userID)) warnings[userID] = 0;
-	warnings[userID]++;
-	if (warnings[userID] >= 3) {
-		timeout(channelID, userID);
-	}
-	setTimeout(function() {
-		warnings[userID]--;
-	}, 15 * 60e3);
-}
+function messageListener(user, userID, channelID, message, evt) {
+	if (userID === client.id) return;
 
-function timeout(channelID, userID) {
-	if (!timeouts.hasOwnProperty(userID)) timeouts[userID] = new Date().getTime() + 60 * 1e3;
-	client.sendMessage({
-		to: channelID,
-		message: "<@" + userID + ">, you have been timed out for one minute."
-	});
-	warnings[userID] = 0;
-}
-
-messageListeners = {
-	filterTimeout: function(user, userID, channelID, message, evt) {
-		if (timeouts.hasOwnProperty(userID) && timeouts[userID] < new Date().getTime()) {
-			client.deleteMessage({
-				channelID: channelID,
-				messageID: evt.d.id
-			});
-		}
-	},
-
-	mentionBot: function(user, userID, channelID, message, evt) {
-		evt.d.mentions.forEach(function(mention) {
-			if (mention.id === client.id) {
-				client.sendMessage({
-					to: channelID,
-					message: "Hello <@" + userID + ">"
-				});
+	loweredMessage = message.toLowerCase();
+	trimedMessage = message.trim();
+	async.series({
+		addUserKey: function(callback) {
+			if (!usersInfos.hasOwnProperty(userID)) {
+				usersInfos[userID] = {
+					timeout: 0,
+					warnings: 0
+				};
 			}
-		});
-	},
-	autoMention: function(user, userID, channelID, message, evt) {
-		evt.d.mentions.forEach(function(mention) {
-			if (mention.id === userID) {
-				client.sendMessage({
-					to: channelID,
-					message: "Hey <@" + userID + ">, speaking to yourself?..."
-				});
-			}
-		});
-	},
+			return callback();
+		},
 
-	filterForbiddenWords: function(user, userID, channelID, message, evt) {
-		message = message.toLowerCase();
-		config.forbiddenWords.some(function(word) {
-			if (message.indexOf(word) !== -1) {
-				client.deleteMessage({
+		filterTimeout: function(callback) {
+			if (usersInfos[userID].timeout >= new Date().getTime()) {
+				return client.deleteMessage({
 					channelID: channelID,
 					messageID: evt.d.id
+				}, function(err) {
+					return callback("User timed out.");
 				});
-
-				addWarning(channelID, userID);
-				sendWarningMessage(channelID, userID);
-				return true;
 			}
-		});
-	},
+			return callback();
+		},
 
-	commands: function(user, userID, channelID, message, evt) {
-		message = message.trim();
-		if (message.substring(0, 1) == '!') {
-			var args = message.substring(1).split(' ');
-			var cmd = args[0];
+		greetBot: function(callback) {
+			async.each(evt.d.mentions, function(mention, callback) {
+				if (mention.id === client.id) {
+					return async.some(config.hellos, function(word, callback) {
+						if (loweredMessage.indexOf(word) !== -1) {
+							return client.sendMessage({
+								to: channelID,
+								message: "Hello <@" + userID + ">!"
+							}, function(err) {
+								return callback(null, true);
+							});
+						}
+						return callback(null, false);
+					}, callback);
+				}
+				return callback();
+			}, callback);
+		},
+		autoMention: function(callback) {
+			async.each(evt.d.mentions, function(mention, callback) {
+				if (mention.id === userID) {
+					return client.sendMessage({
+						to: channelID,
+						message: "Hey <@" + userID + ">, speaking to yourself?..."
+					}, callback);
+				}
+				return callback();
+			}, callback);
+		},
 
-			args = args.splice(1);
-			switch (cmd) {
-				case 'warnings':
-					sendWarningMessage(channelID, userID);
-					break;
+		filterForbiddenWords: function(callback) {
+			async.some(config.forbiddenWords, function(word, callback) {
+				if (loweredMessage.indexOf(word) !== -1) {
+					return async.series([
+						function(callback) {
+							client.deleteMessage({
+								channelID: channelID,
+								messageID: evt.d.id
+							}, callback);
+						},
+						function(callback) {
+							addWarning(channelID, userID, callback)
+						}
+					], function(err) {
+						return callback(null, true);
+					});
+				}
+				return callback(null, false);
+			}, callback);
+		},
+
+		commands: function(callback) {
+			if (trimedMessage.substring(0, 1) == "!") {
+				var args = message.substring(1).split(" ");
+				var cmd = args[0];
+
+				args = args.splice(1);
+				switch (cmd) {
+					case "warnings":
+						sendWarningMessage(channelID, userID, callback);
+						break;
+				}
+			} else {
+				return callback();
 			}
 		}
-	}
+	}, function(err, results) {
+		if (err) logger.error(err);
+		logger.info(JSON.stringify(usersInfos[userID], null, 2));
+	});
 };
 
-client.on('ready', function(evt) {
-	logger.info('Connected');
-	logger.info('Logged in as: ' + client.username + ' - (' + client.id + ')');
+client.on("ready", function(evt) {
+	logger.info("Logged in as: " + client.username + " - (" + client.id + ")");
 });
 
-Object.keys(messageListeners).forEach(function(key) {
-	client.on('message', messageListeners[key]);
-});
+client.on("message", messageListener);
