@@ -1,0 +1,11 @@
+{
+  "name": "HelloBot",
+  "version": "1.0.0",
+  "description": "A bot that says hello to newcomers",
+  "main": "bot.js",
+  "author": "SegFault",
+  "dependencies": {
+    "discord.io": "^2.5.3",
+    "winston": "^2.4.0"
+  }
+}
