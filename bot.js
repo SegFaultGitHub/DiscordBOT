@@ -19,8 +19,6 @@ var client = new Discord.Client({
 
 // Warnings
 var usersInfos = {};
-var warnings = {};
-var timeouts = {};
 
 function addWarning(channelID, userID, callback) {
 	async.waterfall([
@@ -87,6 +85,29 @@ function messageListener(user, userID, channelID, message, evt) {
 			}
 			return callback();
 		},
+		filterForbiddenWords: function(callback) {
+			async.some(config.forbiddenWords, function(word, callback) {
+				if (loweredMessage.indexOf(word) !== -1) {
+					return async.series([
+						function(callback) {
+							client.deleteMessage({
+								channelID: channelID,
+								messageID: evt.d.id
+							}, callback);
+						},
+						function(callback) {
+							addWarning(channelID, userID, callback)
+						}
+					], function(err) {
+						return callback(null, true);
+					});
+				}
+				return callback(null, false);
+			}, function(err, res) {
+				if (err || res) return callback("Forbidden word.");
+				return callback();
+			});
+		},
 
 		greetBot: function(callback) {
 			async.each(evt.d.mentions, function(mention, callback) {
@@ -118,27 +139,6 @@ function messageListener(user, userID, channelID, message, evt) {
 			}, callback);
 		},
 
-		filterForbiddenWords: function(callback) {
-			async.some(config.forbiddenWords, function(word, callback) {
-				if (loweredMessage.indexOf(word) !== -1) {
-					return async.series([
-						function(callback) {
-							client.deleteMessage({
-								channelID: channelID,
-								messageID: evt.d.id
-							}, callback);
-						},
-						function(callback) {
-							addWarning(channelID, userID, callback)
-						}
-					], function(err) {
-						return callback(null, true);
-					});
-				}
-				return callback(null, false);
-			}, callback);
-		},
-
 		commands: function(callback) {
 			if (trimedMessage.substring(0, 1) == "!") {
 				var args = message.substring(1).split(" ");
@@ -156,7 +156,7 @@ function messageListener(user, userID, channelID, message, evt) {
 		}
 	}, function(err, results) {
 		if (err) logger.error(err);
-		logger.info(JSON.stringify(usersInfos[userID], null, 2));
+		// logger.info(JSON.stringify(usersInfos[userID], null, 2));
 	});
 };
 
