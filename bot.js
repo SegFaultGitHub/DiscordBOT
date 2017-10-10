@@ -3,6 +3,7 @@ var logger = require("winston");
 var auth = require("./auth.json");
 var config = require("./config.json");
 var async = require("async");
+var redis = require("redis");
 
 // Configure logger settings
 logger.remove(logger.transports.Console);
@@ -12,22 +13,27 @@ logger.add(logger.transports.Console, {
 logger.level = "debug";
 
 // Initialize Discord Bot
-var client = new Discord.Client({
+var discordClient = new Discord.Client({
 	token: auth.token,
 	autorun: true
 });
+var botConfig = config.botConfig;
+var usersInfos = undefined;
+var redisClient = redis.createClient({
+	host: config.redis.host,
+	port: config.redis.port
+});
 
-// Warnings
-var usersInfos = {};
-
-function clientSendMessage(options, callback) {
-	client.sendMessage(options, function(err, res) {
+function discordClientSendMessage(options, callback) {
+	if (!options.to) return callback("No channelID set.");
+	discordClient.sendMessage(options, function(err, res) {
+		if (options.expire)
 		setTimeout(function() {
-			client.deleteMessage({
+			discordClient.deleteMessage({
 				channelID: res.channel_id,
 				messageID: res.id
 			});
-		}, Number(options.expire) || 15 * 1e3);
+		}, options.expire * 1e3);
 		return callback(err, res);
 	});
 }
@@ -43,17 +49,19 @@ function addWarning(channelID, userID, callback) {
 			return callback(null, usersInfos[userID].warnings);
 		},
 		function(warningCount, callback) {
-			if (warningCount >= config.warningCount) {
-				usersInfos[userID].messageTimeout = now(config.messageTimeout);
+			if (warningCount >= botConfig.warningCount) {
+				usersInfos[userID].messageTimeout = now(botConfig.messageTimeout);
 				usersInfos[userID].warnings = 0;
-				clientSendMessage({
+				discordClientSendMessage({
 					to: channelID,
-					message: "<@" + userID + ">, you have been timed out for one minute."
+					message: "<@" + userID + ">, you have been timed out for one minute.",
+					expire: 15
 				}, callback);
 			} else {
-				clientSendMessage({
+				discordClientSendMessage({
 					to: channelID,
-					message: "<@" + userID + ">, you have now " + warningCount + " warning" + (warningCount > 1 ? "s" : "") + "."
+					message: "<@" + userID + ">, you have now " + warningCount + " warning" + (warningCount > 1 ? "s" : "") + ".",
+					expire: 15
 				}, callback);
 			}
 		}
@@ -68,18 +76,45 @@ function addWarning(channelID, userID, callback) {
 
 function sendWarningMessage(channelID, userID, callback) {
 	var w = usersInfos[userID].warnings || 0;
-	clientSendMessage({
+	discordClientSendMessage({
 		to: channelID,
-		message: "<@" + userID + ">, you have now " + w + " warning" + (w > 1 ? "s" : "") + "."
+		message: "<@" + userID + ">, you have now " + w + " warning" + (w > 1 ? "s" : "") + ".",
+		expire: 15
 	}, callback);
 }
 
 function messageListener(user, userID, channelID, message, evt) {
-	if (userID === client.id) return;
+	if (userID === discordClient.id) return;
+
+	discordClientSendMessage({
+		to: botConfig.defaultChannelID,
+		message: JSON.stringify(evt, null, 2)
+	}, function(err) {
+		logger.info(JSON.stringify(evt, null, 2));
+		if (err) logger.error(err);
+	});
 
 	loweredMessage = message.toLowerCase();
 	trimedMessage = message.trim();
 	async.waterfall([
+		//retrieveRedisData:
+		function(callback) {
+			if (!usersInfos) {
+				redisClient.get("usersInfos", function(err, data) {
+					logger.info(data);
+					if (err) {
+						logger.error("Failed to get Redis data");
+						usersInfos = {};
+					} else {
+						usersInfos = JSON.parse(data) || {};
+					}
+					return callback();
+				});
+			} else {
+				return callback();
+			}
+		},
+
 		//addUserKey:
 		function(callback) {
 			if (!usersInfos.hasOwnProperty(userID)) {
@@ -88,7 +123,7 @@ function messageListener(user, userID, channelID, message, evt) {
 					warnings: 0,
 					commandTimeout: 0
 				};
-				client.createDMChannel(userID, function(err, res) {
+				discordClient.createDMChannel(userID, function(err, res) {
 					usersInfos[userID].DMChannelID = res.id;
 					return callback(err);
 				});
@@ -100,7 +135,7 @@ function messageListener(user, userID, channelID, message, evt) {
 		//filterTimeout:
 		function(callback) {
 			if (usersInfos[userID].messageTimeout >= now()) {
-				return client.deleteMessage({
+				return discordClient.deleteMessage({
 					channelID: channelID,
 					messageID: evt.d.id
 				}, function(err) {
@@ -111,11 +146,11 @@ function messageListener(user, userID, channelID, message, evt) {
 		},
 		//filterForbiddenWords:
 		function(callback) {
-			async.some(config.forbiddenWords, function(word, callback) {
+			async.some(botConfig.forbiddenWords, function(word, callback) {
 				if (loweredMessage.indexOf(word) !== -1) {
 					return async.series([
 						function(callback) {
-							client.deleteMessage({
+							discordClient.deleteMessage({
 								channelID: channelID,
 								messageID: evt.d.id
 							}, callback);
@@ -138,10 +173,10 @@ function messageListener(user, userID, channelID, message, evt) {
 		//greetBot:
 		function(callback) {
 			async.each(evt.d.mentions, function(mention, callback) {
-				if (mention.id === client.id) {
-					return async.some(config.hellos, function(word, callback) {
+				if (mention.id === discordClient.id) {
+					return async.some(botConfig.hellos, function(word, callback) {
 						if (loweredMessage.indexOf(word) !== -1) {
-							return clientSendMessage({
+							return discordClientSendMessage({
 								to: channelID,
 								message: "Hello <@" + userID + ">!"
 							}, function(err) {
@@ -158,7 +193,7 @@ function messageListener(user, userID, channelID, message, evt) {
 		function(callback) {
 			async.each(evt.d.mentions, function(mention, callback) {
 				if (mention.id === userID) {
-					return clientSendMessage({
+					return discordClientSendMessage({
 						to: channelID,
 						message: "Hey <@" + userID + ">, speaking to yourself?..."
 					}, callback);
@@ -176,56 +211,56 @@ function messageListener(user, userID, channelID, message, evt) {
 
 				args = args.splice(1);
 
-				var channelToSend = config.sendDM ? usersInfos[userID].DMChannelID : channelID;
+				var channelToSend = botConfig.sendDM ? usersInfos[userID].DMChannelID : channelID;
 
 				switch (cmd) {
 					case "warnings":
-						usersInfos[userID].commandTimeout = now(config.commandTimeout);
-						sendWarningMessage(channelToSend, userID, function(err, res) {
-							if (err) return callback(err);
-							return callback(null, true);
-						});
-						break;
+					usersInfos[userID].commandTimeout = now(botConfig.commandTimeout);
+					sendWarningMessage(channelToSend, userID, function(err, res) {
+						if (err) return callback(err);
+						return callback(null, true);
+					});
+					break;
 					case "clean":
-						usersInfos[userID].commandTimeout = now(config.commandTimeout);
-						retry = true;
-						before = null;
-						async.whilst(function() {
-							return retry;
-						}, function(callback) {
-							client.getMessages({
-								channelID: channelID,
-								before: before
-							}, function(err, res) {
-								if (err) return callback(err);
-								if (res.length === 0) {
-									retry = false;
-									return callback();
-								}
-								retry = res.length === 50;
-								before = res[res.length - 1].id;
-								var ids = res.filter(function(item) {
-									return item.author.username === client.username;
-								}).map(function(item) {
-									return item.id
-								});
-								if (ids.length > 0) {
-									client.deleteMessages({
-										channelID: channelID,
-										messageIDs: ids
-									}, callback);
-								} else {
-									return callback();
-								}
-							});
-						}, function(err) {
+					usersInfos[userID].commandTimeout = now(botConfig.commandTimeout);
+					retry = true;
+					before = null;
+					async.whilst(function() {
+						return retry;
+					}, function(callback) {
+						discordClient.getMessages({
+							channelID: channelID,
+							before: before
+						}, function(err, res) {
 							if (err) return callback(err);
-							return callback(null, true);
+							if (res.length === 0) {
+								retry = false;
+								return callback();
+							}
+							retry = res.length === 50;
+							before = res[res.length - 1].id;
+							var ids = res.filter(function(item) {
+								return item.author.username === discordClient.username;
+							}).map(function(item) {
+								return item.id
+							});
+							if (ids.length > 0) {
+								discordClient.deleteMessages({
+									channelID: channelID,
+									messageIDs: ids
+								}, callback);
+							} else {
+								return callback();
+							}
 						});
-						break;
+					}, function(err) {
+						if (err) return callback(err);
+						return callback(null, true);
+					});
+					break;
 					default:
-						return callback(null, false);
-						break;
+					return callback(null, false);
+					break;
 				}
 			} else {
 				return callback(null, false);
@@ -234,7 +269,7 @@ function messageListener(user, userID, channelID, message, evt) {
 		// deleteCommandMessage:
 		function(del, callback) {
 			if (del) {
-				client.deleteMessage({
+				discordClient.deleteMessage({
 					channelID: channelID,
 					messageID: evt.d.id
 				}, callback);
@@ -245,11 +280,43 @@ function messageListener(user, userID, channelID, message, evt) {
 	], function(err) {
 		if (err) logger.error(err);
 		logger.info(JSON.stringify(usersInfos[userID], null, 2));
+		redisClient.set("usersInfos", JSON.stringify(usersInfos), function(err) {
+			logger.info("usersInfos updated");
+		});
 	});
 };
 
-client.on("ready", function(evt) {
-	logger.info("Logged in as: " + client.username + " - (" + client.id + ")");
+discordClient.on("ready", function(evt) {
+	logger.info("Logged in as: " + discordClient.username + " - (" + discordClient.id + ")");
 });
 
-client.on("message", messageListener);
+discordClient.on("message", messageListener);
+
+discordClient.on("presence", function(user, userID, status, game, evt) {
+	// logger.info(JSON.stringify({
+	// 	user: user,
+	// 	userID: userID,
+	// 	status: status,
+		// game: game,
+	// 	evt: evt
+	// }, null, 2));
+	if (game) {
+		var title;
+		if (game.hasOwnProperty("name")) title = user + " en stream sur *" + game.name + "* ici !"
+		else title = user + " en stream ici !"
+		discordClientSendMessage({
+			to: botConfig.defaultChannelID,
+			message: "@everyone\n" + botConfig.startStreamMessage.replace("{ID}", userID),
+			embed: {
+				title: user + " en stream sur " + game.name + " ici !",
+				url: "https://www.google.com",
+				thumbnail: {
+					url: "https://www.google.com"
+				},
+				type: "link"
+			}
+		}, function(err) {
+			if (err) logger.error(err);
+		});
+	}
+});
