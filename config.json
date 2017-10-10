@@ -1,17 +1,27 @@
 {
-	"hellos": [
-		"bonjour", "salut", "hey", "yo", "coucou", "plop",
-		"hello", "hi"
-	],
+	"botConfig": {
+		"hellos": [
+			"bonjour", "salut", "hey", "yo", "coucou", "plop",
+			"hello", "hi"
+		],
 
-	"forbiddenWords": [
-		"caca"
-	],
-	"warningCount": 3,
+		"forbiddenWords": [
+			"caca"
+		],
+		"warningCount": 3,
 
-	"_comment": "durations in seconds",
-	"messageTimeout": 60,
-	"commandTimeout": 5,
+		"_comment": "durations in seconds",
+		"messageTimeout": 60,
+		"commandTimeout": 5,
 
-	"sendDM": false
+		"sendDM": false,
+		"defaultChannelID": "367386455204691968",
+
+		"startStreamMessage": "<@{ID}> vient de lancer un stream !"
+	},
+
+	"redis": {
+		"host": "localhost",
+		"port": 6379
+	}
 }
