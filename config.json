@@ -17,11 +17,18 @@
 		"sendDM": false,
 		"defaultChannelID": "367386455204691968",
 
-		"startStreamMessage": "<@{ID}> vient de lancer un stream !"
+		"startStreamMessage": "<@{ID}> vient de lancer un stream !",
+
+		"adminIDs": ["101654140672806912"],
+
+		"botlessChannelID": "367659800508628992",
+
+		"god": "101654140672806912"
 	},
 
 	"redis": {
 		"host": "localhost",
-		"port": 6379
+		"port": 6379,
+		"db": 5
 	}
 }

@@ -1,7 +1,7 @@
 {
-  "name": "HelloBot",
+  "name": "DiscordBot",
   "version": "1.0.0",
-  "description": "A bot that says hello to newcomers",
+  "description": "A simple Dicord bot",
   "main": "bot.js",
   "author": "SegFault",
   "dependencies": {
