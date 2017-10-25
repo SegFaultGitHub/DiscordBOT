@@ -4,6 +4,16 @@ var auth = require("./auth.json");
 var config = require("./config.json");
 var async = require("async");
 var redis = require("redis");
+var merge = require("merge");
+var fs = require("fs");
+
+libs = {};
+// Initilize libs
+async.parallel({
+	maze: require("./maze.js")
+}, function(err, results) {
+	libs = merge(results, libs);
+});
 
 // Configure logger settings
 logger.remove(logger.transports.Console);
@@ -332,6 +342,44 @@ function messageListener(user, userID, channelID, message, evt) {
 									return callback(null, true);
 								});
 								break;
+							case "maze":
+								var maze = libs.maze({
+									width:  Number(args[0]),
+									height: Number(args[1])
+								});
+								async.waterfall([
+									// generateImage:
+									function(callback) {
+										maze.toPPM(Number(args[2]), userID + "-" + now(), callback);
+									},
+									// sendImage:
+									function(name, callback) {
+										discordClient.uploadFile({
+											to: channelID,
+											file: name
+										}, function(err) {
+											if (err) return	callback(err);
+											else return callback(null, name);
+										});
+									},
+									// deleteImage:
+									function(name, callback) {
+										fs.unlink(name, callback);
+									}
+								], function(err) {
+									if (err) {
+										discordClientSendMessage({
+											to: channelID,
+											message: "<@" + userID + ">, oops, je n'ai pas pu générer un labyrinthe !\r" + err
+										}, function(err) {
+											if (err) return callback(err);
+											return callback(null, true);
+										});
+									} else {
+										return callback(null, true);
+									}
+								});
+								break;
 							default:
 								return callback(null, false);
 						}
@@ -364,31 +412,31 @@ discordClient.on("ready", function(evt) {
 
 discordClient.on("message", messageListener);
 
-discordClient.on("presence", function(user, userID, status, game, evt) {
-	logger.info(JSON.stringify({
-		user: user,
-		userID: userID,
-		status: status,
-		game: game,
-		evt: evt
-	}, null, 2));
-	if (game) {
-		var title;
-		if (game.hasOwnProperty("name")) title = user + " en stream sur *" + game.name + "* ici !";
-		else title = user + " en stream ici !";
-		discordClientSendMessage({
-			to: botConfig.defaultChannelID,
-			message: "@everyone\n" + botConfig.startStreamMessage.replace("{ID}", userID),
-			embed: {
-				title: user + " en stream sur " + game.name + " ici !",
-				url: "https://www.google.com",
-				thumbnail: {
-					url: "https://www.google.com"
-				},
-				type: "link"
-			}
-		}, function(err) {
-			if (err) logger.error(err);
-		});
-	}
-});
+// discordClient.on("presence", function(user, userID, status, game, evt) {
+// 	logger.info(JSON.stringify({
+// 		user: user,
+// 		userID: userID,
+// 		status: status,
+// 		game: game,
+// 		evt: evt
+// 	}, null, 2));
+// 	if (game) {
+// 		var title;
+// 		if (game.hasOwnProperty("name")) title = user + " en stream sur *" + game.name + "* ici !";
+// 		else title = user + " en stream ici !";
+// 		discordClientSendMessage({
+// 			to: botConfig.defaultChannelID,
+// 			message: "@everyone\n" + botConfig.startStreamMessage.replace("{ID}", userID),
+// 			embed: {
+// 				title: user + " en stream sur " + game.name + " ici !",
+// 				url: "https://www.google.com",
+// 				thumbnail: {
+// 					url: "https://www.google.com"
+// 				},
+// 				type: "link"
+// 			}
+// 		}, function(err) {
+// 			if (err) logger.error(err);
+// 		});
+// 	}
+// });
