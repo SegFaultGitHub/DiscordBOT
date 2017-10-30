@@ -34,7 +34,8 @@ var redisClient = redis.createClient({
 });
 redisClient.select(config.redis.db, function(err) {
 	if (err) return logger.error(err);
-	return logger.info("Redis client connected to db" + config.redis.db);
+	logger.info("Redis client connected to db" + config.redis.db);
+	redisClient.setnx("mazeTimeout", 0);
 });
 
 function discordClientSendMessage(options, callback) {
@@ -136,8 +137,10 @@ function sendWarningMessage(channelID, userID, callback) {
 	], callback);
 }
 
+
+// TODO: clean commands
 function messageListener(user, userID, channelID, message, evt) {
-	if (userID === discordClient.id || channelID === botConfig.botlessChannelID) return;
+	if (userID === discordClient.id || botConfig.botlessChannelIDs.indexOf(channelID) !== -1) return;
 
 	loweredMessage = message.toLowerCase();
 	trimedMessage = message.trim();
@@ -146,6 +149,9 @@ function messageListener(user, userID, channelID, message, evt) {
 		//initRedisKey:
 		function(callback) {
 			async.parallel([
+				function(callback) {
+					redisClient.hset(userID, "username", user, callback);
+				},
 				function(callback) {
 					redisClient.hsetnx(userID, "warnings", 0, callback);
 				},
@@ -157,16 +163,6 @@ function messageListener(user, userID, channelID, message, evt) {
 				},
 				function(callback) {
 					redisClient.hsetnx(userID, "timeouts", 0, callback);
-				},
-				function(callback) {
-					async.waterfall([
-						function(callback) {
-							discordClient.createDMChannel(userID, callback);
-						},
-						function(res, callback) {
-							redisClient.hsetnx(userID, "DMChannelID", res.id, callback);
-						}
-					], callback);
 				}
 			], function(err) {
 				if (err) return callback(err);
@@ -234,7 +230,29 @@ function messageListener(user, userID, channelID, message, evt) {
 						if (loweredMessage.indexOf(word) !== -1) {
 							return discordClientSendMessage({
 								to: channelID,
-								message: "Salut <@" + userID + ">!"
+								message: "Salut <@" + userID + "> !"
+							}, function(err) {
+								return callback(null, true);
+							});
+						}
+						return callback(null, false);
+					}, callback);
+				}
+				return callback();
+			}, function(err) {
+				if (err) return callback(err);
+				return callback();
+			});
+		},
+		//howAreYouBot:
+		function(callback) {
+			async.each(evt.d.mentions, function(mention, callback) {
+				if (mention.id === discordClient.id) {
+					return async.some(botConfig.howAreYous, function(word, callback) {
+						if (loweredMessage.indexOf(word) !== -1) {
+							return discordClientSendMessage({
+								to: channelID,
+								message: "Ça va, merci <@" + userID + "> :)"
 							}, function(err) {
 								return callback(null, true);
 							});
@@ -268,27 +286,40 @@ function messageListener(user, userID, channelID, message, evt) {
 		function(callback) {
 			async.waterfall([
 				function(callback) {
-					redisClient.hget(userID, "commandTimeout", callback);
+					redisClient.hget(userID, "commandTimeout", function(err, res) {
+						if (err) return callback(err);
+						return callback(null, {
+							command: res
+						});
+					});
 				},
-				function(commandTimeout, callback) {
-					commandTimeout = Number(commandTimeout);
+				function(timeouts, callback) {
+					redisClient.get("mazeTimeout", function(err, res) {
+						if (err) return callback(err);
+						return callback(null, merge(timeouts, {
+							maze: res
+						}));
+					});
+				},
+				function(timeouts, callback) {
+					timeouts.command = Number(timeouts.command);
 					if (trimedMessage.substring(0, 1) == "!") {
 						redisClient.hset(userID, "commandTimeout", now(botConfig.commandTimeout), function(err) {
 							if (err) return callback(err);
-							return callback(null, commandTimeout < now());
+							return callback(null, timeouts.command < now(), timeouts);
 						});
 					} else {
-						return callback(null, false);
+						return callback(null, false, {});
 					}
 				},
-				function(command, callback) {
+				function(command, timeouts, callback) {
 					if (command) {
 						var args = message.substring(1).split(" ");
 						var cmd = args[0];
 
 						args = args.splice(1);
 
-						var channelToSend = /*botConfig.sendDM ? usersInfos[userID].DMChannelID : */ channelID;
+						var channelToSend = channelID;
 
 						switch (cmd) {
 							case "warnings":
@@ -343,42 +374,60 @@ function messageListener(user, userID, channelID, message, evt) {
 								});
 								break;
 							case "maze":
-								var maze = libs.maze({
-									width:  Number(args[0]),
-									height: Number(args[1])
-								});
-								async.waterfall([
-									// generateImage:
-									function(callback) {
-										maze.toPPM(Number(args[2]), userID + "-" + now(), callback);
-									},
-									// sendImage:
-									function(name, callback) {
-										discordClient.uploadFile({
-											to: channelID,
-											file: name
-										}, function(err) {
-											if (err) return	callback(err);
-											else return callback(null, name);
-										});
-									},
-									// deleteImage:
-									function(name, callback) {
-										fs.unlink(name, callback);
-									}
-								], function(err) {
-									if (err) {
-										discordClientSendMessage({
-											to: channelID,
-											message: "<@" + userID + ">, oops, je n'ai pas pu générer un labyrinthe !\r" + err
-										}, function(err) {
-											if (err) return callback(err);
+								if (timeouts.maze < now()) {
+									logger.info("Maze");
+									var width = Math.min(Number(args[0]) || 30, botConfig.maze.maxWidth);
+									var height = Math.min(Number(args[1]) || 30, botConfig.maze.maxHeight);
+									var size = Math.min(Number(args[2]) || 30, botConfig.maze.maxSize);
+									var maze = libs.maze({
+										width:  width,
+										height: height
+									});
+									async.waterfall([
+										// setMazeTimeout
+										function(callback) {
+											redisClient.set("mazeTimeout", now(botConfig.maze.timeout), callback);
+										},
+										// generateImage:
+										function(_, callback) {
+											maze.export(size, userID + "-" + now(), callback);
+										},
+										// sendImage:
+										function(name, callback) {
+											discordClient.uploadFile({
+												to: channelID,
+												file: name
+											}, function(err) {
+												if (err) return	callback(err);
+												else return callback(null, name);
+											});
+										},
+										// deleteImage:
+										function(name, callback) {
+											fs.unlink(name, callback);
+										}
+									], function(err) {
+										if (err) {
+											discordClientSendMessage({
+												to: channelID,
+												message: "<@" + userID + ">, oops, je n'ai pas pu générer un labyrinthe !\r" + err
+											}, function(err) {
+												if (err) return callback(err);
+												return callback(null, true);
+											});
+										} else {
 											return callback(null, true);
-										});
-									} else {
-										return callback(null, true);
-									}
-								});
+										}
+									});
+								} else {
+									discordClientSendMessage({
+										to: channelID,
+										message: "<@" + userID + ">, attends un peu, je suis fatigué..."
+									}, function(err) {
+										if (err) return callback(err);
+										return callback(null, false);
+									});
+								}
 								break;
 							default:
 								return callback(null, false);
@@ -411,32 +460,3 @@ discordClient.on("ready", function(evt) {
 });
 
 discordClient.on("message", messageListener);
-
-// discordClient.on("presence", function(user, userID, status, game, evt) {
-// 	logger.info(JSON.stringify({
-// 		user: user,
-// 		userID: userID,
-// 		status: status,
-// 		game: game,
-// 		evt: evt
-// 	}, null, 2));
-// 	if (game) {
-// 		var title;
-// 		if (game.hasOwnProperty("name")) title = user + " en stream sur *" + game.name + "* ici !";
-// 		else title = user + " en stream ici !";
-// 		discordClientSendMessage({
-// 			to: botConfig.defaultChannelID,
-// 			message: "@everyone\n" + botConfig.startStreamMessage.replace("{ID}", userID),
-// 			embed: {
-// 				title: user + " en stream sur " + game.name + " ici !",
-// 				url: "https://www.google.com",
-// 				thumbnail: {
-// 					url: "https://www.google.com"
-// 				},
-// 				type: "link"
-// 			}
-// 		}, function(err) {
-// 			if (err) logger.error(err);
-// 		});
-// 	}
-// });

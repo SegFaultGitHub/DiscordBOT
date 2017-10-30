@@ -5,14 +5,24 @@
 			"hello", "hi"
 		],
 
+		"howAreYous": [
+			"ça va"
+		],
+
 		"forbiddenWords": [
-			"caca"
+
 		],
 		"warningCount": 3,
 
 		"_comment": "durations in seconds",
 		"messageTimeout": 60,
 		"commandTimeout": 5,
+		"maze": {
+			"timeout": 30,
+			"maxWidth": 50,
+			"maxHeight": 50,
+			"maxSize": 50
+		},
 
 		"sendDM": false,
 		"defaultChannelID": "367386455204691968",
@@ -21,7 +31,7 @@
 
 		"adminIDs": ["101654140672806912"],
 
-		"botlessChannelID": "367659800508628992",
+		"botlessChannelIDs": ["367659800508628992", "371710535038795777"],
 
 		"god": "101654140672806912"
 	},

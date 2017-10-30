@@ -132,7 +132,7 @@ module.exports = function(callback) {
 			}
 		};
 
-		this.toPPM = function(size, name, callback) {
+		this.export = function(size, name, callback) {
 			var i, j, ii, jj;
 			var dimensions = this.dimensions;
 			var cellArray = this.cellArray;
